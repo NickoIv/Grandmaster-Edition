@@ -31,14 +31,28 @@ function moveWords(move){const piece=state.board[move.from[0]][move.from[1]],tar
 function clearCoachMarks(){document.querySelectorAll('.coach-arrow-origin,.coach-arrow-target').forEach(el=>el.classList.remove('coach-arrow-origin','coach-arrow-target'))}
 function markCoachMove(move,exact=true){clearCoachMarks();const from=document.querySelector(`.square[data-row="${move.from[0]}"][data-col="${move.from[1]}"]`);const to=document.querySelector(`.square[data-row="${move.to[0]}"][data-col="${move.to[1]}"]`);if(from)from.classList.add('coach-arrow-origin');if(exact&&to)to.classList.add('coach-arrow-target');setTimeout(clearCoachMarks,exact?3800:2500)}
 
-async function coachHint(mode){
- if(state.gameOver||state.pendingPromotion){showToast('Сначала завершите текущий ход');return}if(state.gameMode==='online'){showToast('Подсказки выключены в сетевой партии — честная игра');return}
- setCoach('<strong>Тренер думает…</strong><br>Ищу практичное продолжение в этой позиции.');
- try{const uci=await StockfishPro.bestMove(boardToFEN(),state.difficulty||2),move=uciToMove(uci);if(!move)throw Error('Нет хода');markCoachMove(move,mode==='exact');const words=moveWords(move);const piece=state.board[move.from[0]][move.from[1]],target=state.board[move.to[0]][move.to[1]];
-  let why=target?'выигрывает материал и заставляет соперника реагировать.':typeOf(piece)==='k'?'делает короля безопаснее.':typeOf(piece)==='n'||typeOf(piece)==='b'?'развивает фигуру и усиливает контроль над доской.':'улучшает позицию и создаёт новую угрозу.';
-  setCoach(mode==='soft'?`<strong>Мягкая подсказка</strong><br>Посмотрите на ${pieceName(piece)} на ${coord(move.from[0],move.from[1])}. Она может заметно улучшить вашу позицию.`:`<strong>Рекомендация: ${words}</strong><br>Этот ход ${why}`);Academy.profile.bestMove=uci;Academy.save(Academy.profile);Academy.speak(mode==='exact'?words:'Посмотрите на подсвеченную фигуру');
- }catch(e){setCoach('<strong>Тренер временно недоступен.</strong><br>Встроенный анализ продолжит работать; попробуйте ещё раз через секунду.');showToast('⚠️ Не удалось получить подсказку')}
+function localHintMove(){
+ const moves=getAllValidMoves(state.turn);if(!moves.length)return null;
+ let best=moves[0],bestScore=-Infinity;
+ for(const move of moves){const simulated=simulateMove(state.board,state.kingPositions,state.castling,state.enPassant,move.from,move.to,state.turn),opponent=state.turn==='white'?'black':'white';let score=evaluateBoard(simulated.board,state.turn);const victim=state.board[move.to[0]][move.to[1]];if(victim)score+=PIECE_VALUES[typeOf(victim)]*.35;if(isKingInCheck(simulated.board,simulated.kings[opponent],opponent))score+=60;if(score>bestScore){bestScore=score;best=move}}
+ return best;
 }
+function validCoachMove(move){return!!move&&getValidMoves(move.from[0],move.from[1]).some(([row,col])=>row===move.to[0]&&col===move.to[1])}
+async function coachHint(mode){
+ if(state.gameOver||state.pendingPromotion){showToast('Сначала завершите текущий ход');return}if(state.gameMode==='online'){showToast('Подсказки выключены в сетевой партии — честная игра');return}if(Academy.hintBusy){showToast('Тренер уже ищет ход…');return}
+ Academy.hintBusy=true;clearCoachMarks();setCoach('<strong>Тренер думает…</strong><br>Ищу практичное продолжение в этой позиции.');
+ let move=null,uci='',source='Stockfish';
+ try{uci=await StockfishPro.bestMove(boardToFEN(),state.difficulty||2);move=uciToMove(uci);if(!validCoachMove(move))throw Error('Некорректный ход движка')}
+ catch(error){move=localHintMove();source='встроенный анализ'}
+ finally{Academy.hintBusy=false}
+ if(!move){setCoach('<strong>Подсказка недоступна.</strong><br>В этой позиции нет легального хода или партия уже завершена.');showToast('⚠️ Нет доступного хода');return}
+ markCoachMove(move,mode==='exact');const words=moveWords(move);const piece=state.board[move.from[0]][move.from[1]],target=state.board[move.to[0]][move.to[1]];
+ const why=target?'выигрывает материал и заставляет соперника реагировать.':typeOf(piece)==='k'?'делает короля безопаснее.':typeOf(piece)==='n'||typeOf(piece)==='b'?'развивает фигуру и усиливает контроль над доской.':'улучшает позицию и создаёт новую угрозу.';
+ setCoach(mode==='soft'?`<strong>Мягкая подсказка</strong><br>Посмотрите на ${pieceName(piece)} на ${coord(move.from[0],move.from[1])}. Она может заметно улучшить вашу позицию.`:`<strong>Рекомендация: ${words}</strong><br>Этот ход ${why}<br><small>Источник: ${source}</small>`);Academy.profile.bestMove=uci||coord(move.from[0],move.from[1])+coord(move.to[0],move.to[1]);Academy.save(Academy.profile);Academy.speak(mode==='exact'?words:'Посмотрите на подсвеченную фигуру');showToast(`💡 ${mode==='soft'?'Посмотрите на подсвеченную фигуру':'Подсказка: '+words}`);
+}
+
+showHint=function(){coachHint('exact')}
+function toggleMobilePanel(){const panel=document.querySelector('.side-panel');if(!panel)return;const expanded=panel.classList.toggle('mobile-expanded');const button=document.getElementById('mobile-panel-toggle');if(button)button.setAttribute('aria-expanded',String(expanded));if(button)button.innerHTML=expanded?'⌃ <span>Скрыть</span>':'☰ <span>Партия</span>';if(expanded)panel.scrollIntoView({behavior:'smooth',block:'nearest'})}
 
 async function coachReviewPosition(){
  if(state.gameMode==='online'){showToast('Анализ скрыт во время сетевой партии');return}const score=evaluateBoard(state.board,state.turn)/100;let message=score>.9?'У вас материальное преимущество — не спешите, укрепите короля и фигуры.':score<-.9?'Позиция требует аккуратной защиты: ищите угрозы и не оставляйте фигуры без защиты.':'Позиция примерно равная. Развивайте фигуры, боритесь за центр и берегите короля.';setCoach(`<strong>Оценка позиции: ${score>0?'+':''}${score.toFixed(1)}</strong><br>${message}`);await coachHint('soft')}
@@ -95,3 +109,6 @@ updateUI=function(){academyUpdate();const reactions=document.getElementById('qui
 
 /* Re-open the landing screen after the academy creates its extra screen. */
 showMenu();
+
+/* Academy is loaded as a separate file; expose actions used by inline controls. */
+Object.assign(window,{coachHint,coachReviewPosition,toggleCoachVoice,openGameReview,sendReaction,requestRematch,showAcademy,startTask,readLesson,editProfileName,setPieceStyle,toggleMobilePanel,showHint});
